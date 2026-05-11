@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <title>3D Logistics Viewer</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #f1f5f9; } /* 깔끔한 연회색 배경 */
+        body { margin: 0; overflow: hidden; background-color: #f1f5f9; }
         canvas { display: block; }
     </style>
 </head>
@@ -18,90 +18,170 @@
         const scene = new THREE.Scene();
         scene.background = new THREE.Color('#f1f5f9');
 
-        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 50000);
+        // 🌟 Z-Fighting 해결 1: 카메라 정밀도(Depth Buffer) 대폭 향상 (10 ~ 30000)
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 10, 30000);
+        
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        // 🌟 고해상도 모니터에서도 선이 흐려지지 않도록 픽셀 비율 일치
+        renderer.setPixelRatio(window.devicePixelRatio);
         renderer.shadowMap.enabled = true;
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.maxPolarAngle = Math.PI / 2; // 땅바닥 아래로 카메라가 내려가지 않게 고정
+        controls.maxPolarAngle = Math.PI / 2;
 
-        // 🌟 조명 설정 (밝고 선명하게)
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
         dirLight.position.set(2000, 3000, 2000);
         dirLight.castShadow = true;
         scene.add(dirLight);
 
-        // 파이썬에서 넘어온 트럭 제원 (이 값에 따라 모든 크기가 변합니다!)
         const truck = simulationData.truck;
-        const viewW = truck.d; // 트럭 길이 (L)
-        const viewH = truck.h; // 트럭 높이 (H)
-        const viewD = truck.w; // 트럭 폭 (W)
+        const viewW = truck.d; 
+        const viewH = truck.h; 
+        const viewD = truck.w; 
 
         const cargoGroup = new THREE.Group();
         scene.add(cargoGroup);
 
-        // ==============================================================
-        // 🎯 1. 바닥 눈금자 (Grid)
-        // ==============================================================
         const gridHelper = new THREE.GridHelper(20000, 100, 0x94a3b8, 0xcbd5e1);
         gridHelper.position.y = -50; 
         scene.add(gridHelper);
 
-        // ==============================================================
-        // 🎯 2. 진한 회색 트럭 철판 바닥
-        // ==============================================================
         const bedThickness = 50;
         const bedGeo = new THREE.BoxGeometry(viewW, bedThickness, viewD);
-        const bedMat = new THREE.MeshLambertMaterial({ color: 0x475569 }); // Slate Gray
+        const bedMat = new THREE.MeshLambertMaterial({ color: 0x475569 }); 
         const truckBed = new THREE.Mesh(bedGeo, bedMat);
         truckBed.position.set(viewW/2, -bedThickness/2, viewD/2);
         truckBed.receiveShadow = true;
         cargoGroup.add(truckBed);
 
-        // ==============================================================
-        // 🎯 3. 파란색 적재 공간 테두리 (사용자가 원한 디자인)
-        // ==============================================================
         const truckGeo = new THREE.BoxGeometry(viewW, viewH, viewD);
         truckGeo.translate(viewW/2, viewH/2, viewD/2); 
-        // 🚨 테두리 색상을 파란색(0x3b82f6)으로 변경했습니다.
-        const truckMat = new THREE.MeshBasicMaterial({ color: 0x3b82f6, wireframe: true, transparent: true, opacity: 0.3 });
+        
+        const truckMat = new THREE.MeshBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.03, side: THREE.DoubleSide });
         const truckMesh = new THREE.Mesh(truckGeo, truckMat);
         cargoGroup.add(truckMesh);
+        
+        const truckEdges = new THREE.EdgesGeometry(truckGeo);
+        const truckLine = new THREE.LineSegments(truckEdges, new THREE.LineBasicMaterial({ color: 0x3b82f6, linewidth: 2 }));
+        cargoGroup.add(truckLine);
 
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        let hasItems = simulationData.items.length > 0;
 
-        // ==============================================================
-        // 🎯 4. 화물(박스) 렌더링
-        // ==============================================================
         simulationData.items.forEach(item => {
+            if (simulationData.use_pallet) {
+                item.y += simulationData.pallet_h;
+            }
+
             const geo = new THREE.BoxGeometry(item.d, item.h, item.w);
             geo.translate(item.d/2, item.h/2, item.w/2);
             
-            // 파이썬에서 지정한 색상(A형 빨강, B형 주황 등)을 그대로 사용
-            const mat = new THREE.MeshLambertMaterial({ color: item.color });
+            // 🌟 Z-Fighting 해결 2: 폴리곤 오프셋 강도를 높여 면을 확실하게 뒤로 뺌
+            const mat = new THREE.MeshLambertMaterial({ 
+                color: item.color,
+                polygonOffset: true,
+                polygonOffsetFactor: 3, 
+                polygonOffsetUnits: 3
+            });
             const mesh = new THREE.Mesh(geo, mat);
             
-            // 파이썬에서 계산된 정확한 X, Y, Z 좌표에 배치
             mesh.position.set(item.z, item.y, item.x);
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             
-            // 상자 테두리를 검은색 선으로 명확하게 표시
             const edges = new THREE.EdgesGeometry(geo);
-            const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x000000, opacity: 0.4, transparent: true }));
+            // 🌟 검은색 테두리 선의 불투명도를 1.0(완전 불투명)으로 설정하여 더욱 또렷하게 렌더링
+            const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x000000, opacity: 1.0, transparent: false }));
             mesh.add(line);
 
             cargoGroup.add(mesh);
+
+            let tX = item.z; let tW = item.d;
+            let tY = item.y; let tH = item.h;
+            let tZ = item.x; let tD = item.w;
+
+            minX = Math.min(minX, tX); maxX = Math.max(maxX, tX + tW);
+            minY = Math.min(minY, tY); maxY = Math.max(maxY, tY + tH);
+            minZ = Math.min(minZ, tZ); maxZ = Math.max(maxZ, tZ + tD);
         });
 
-        // 🌟 3D 공간을 화면 중앙에 보기 좋게 정렬
+        if (simulationData.use_pallet && hasItems) {
+            const pW = simulationData.pallet_w; 
+            const pD = simulationData.pallet_d; 
+            const pH = simulationData.pallet_h; 
+            const palletMat = new THREE.MeshLambertMaterial({ color: 0xDEB887 }); 
+
+            for(let x = 0; x < maxX - 1; x += pW) {
+                for(let z = 0; z < maxZ - 1; z += pD) {
+                    
+                    if (x + pW > viewW || z + pD > viewD) continue;
+
+                    let displayW = pW - 5;
+                    let displayD = pD - 5;
+
+                    const pGeo = new THREE.BoxGeometry(displayW, pH, displayD);
+                    pGeo.translate(displayW/2, pH/2, displayD/2);
+                    const pMesh = new THREE.Mesh(pGeo, palletMat);
+                    pMesh.position.set(x, 0, z); 
+                    
+                    const pEdges = new THREE.EdgesGeometry(pGeo);
+                    const pLine = new THREE.LineSegments(pEdges, new THREE.LineBasicMaterial({ color: 0x8B4513, opacity: 0.6 }));
+                    pMesh.add(pLine);
+                    
+                    cargoGroup.add(pMesh);
+
+                    let localMaxY = 0;
+                    let hasItemsOnPallet = false;
+
+                    simulationData.items.forEach(item => {
+                        let centerX = item.z + (item.d / 2);
+                        let centerZ = item.x + (item.w / 2);
+
+                        if (centerX >= x && centerX < x + pW && centerZ >= z && centerZ < z + pD) {
+                            localMaxY = Math.max(localMaxY, item.y + item.h);
+                            hasItemsOnPallet = true;
+                        }
+                    });
+
+                    if (hasItemsOnPallet) {
+                        const wrapMinY = 0; 
+                        const wrapH = localMaxY - wrapMinY; 
+                        
+                        const wrapGeo = new THREE.BoxGeometry(displayW + 5, wrapH + 5, displayD + 5);
+                        wrapGeo.translate(displayW/2, wrapH/2, displayD/2);
+                        
+                        const wrapMat = new THREE.MeshStandardMaterial({
+                            color: 0xffffff,
+                            transparent: true,
+                            opacity: 0.35,       
+                            roughness: 0.2,      
+                            metalness: 0.1,
+                            depthWrite: false,   
+                            side: THREE.DoubleSide
+                        });
+                        const wrapMesh = new THREE.Mesh(wrapGeo, wrapMat);
+                        
+                        wrapMesh.position.set(x - 2.5, wrapMinY - 2.5, z - 2.5);
+                        
+                        const wrapEdges = new THREE.EdgesGeometry(wrapGeo);
+                        const wrapLine = new THREE.LineSegments(wrapEdges, new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.8, transparent: true }));
+                        wrapMesh.add(wrapLine);
+
+                        cargoGroup.add(wrapMesh);
+                    }
+                }
+            }
+        }
+
         cargoGroup.position.x = -viewW / 2;
         cargoGroup.position.z = -viewD / 2;
 
-        // 카메라 시작 앵글 (대각선 위에서 내려다보는 뷰)
         camera.position.set(viewW * 1.2, viewH * 1.5, viewD * 1.5);
         controls.target.set(0, viewH / 3, 0);
         controls.update();
